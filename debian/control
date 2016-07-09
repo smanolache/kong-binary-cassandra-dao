@@ -1,0 +1,12 @@
+Source: kong-binary-cassandra-dao
+Section: libs
+Priority: optional
+Maintainer: Sorin Manolache <sorinm@gmail.com>
+Build-Depends: debhelper (>= 9), kong (= 0.8.3)
+Standards-Version: 3.9.6
+
+Package: kong-binary-cassandra-dao
+Architecture: all
+Depends: lua5.1, kong (= 0.8.3), lua-cassandra-driver
+Description: Kong DAO using the datastax cassandra driver
+  Kong DAO using the datastax cassandra driver

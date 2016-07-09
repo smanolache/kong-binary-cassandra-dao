@@ -1,0 +1,36 @@
+#!/usr/bin/make -f
+# See debhelper(7) (uncomment to enable)
+# output every command that modifies files on the build system.
+#export DH_VERBOSE = 1
+
+# see EXAMPLES in dpkg-buildflags(1) and read /usr/share/dpkg/*
+DPKG_EXPORT_BUILDFLAGS = 1
+include /usr/share/dpkg/default.mk
+
+export DEB_CFLAGS_MAINT_APPEND = -Wno-strict-aliasing -fno-strict-aliasing
+# see FEATURE AREAS in dpkg-buildflags(1)
+#export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+# see ENVIRONMENT in dpkg-buildflags(1)
+# package maintainers to append CFLAGS
+#export DEB_CFLAGS_MAINT_APPEND  = -Wall -pedantic
+# package maintainers to append LDFLAGS
+#export DEB_LDFLAGS_MAINT_APPEND = -Wl,--as-needed
+
+# main packaging script based on dh7 syntax
+%:
+	dh $@
+
+override_dh_auto_install:
+	install -D -t $(CURDIR)/debian/kong-binary-cassandra-dao/usr/share/lib/5.1/kong/dao kong/dao/cassandra_binary_db.lua
+	install -D -t $(CURDIR)/debian/kong-binary-cassandra-dao/usr/share/lib/5.1/kong/plugins/rate-limiting/dao kong/plugins/rate-limiting/dao/cassandra_binary.lua
+	install -D -t $(CURDIR)/debian/kong-binary-cassandra-dao/usr/share/lib/5.1/kong/plugins/response-ratelimiting/dao kong/plugins/response-ratelimiting/dao/cassandra_binary.lua
+	for i in /usr/share/lua/5.1/kong/plugins/*/migrations/cassandra.lua  \
+	         /usr/share/lua/5.1/kong/dao/migrations/cassandra.lua; do    \
+		dn=$$(dirname "$$i");                                        \
+		install -d $(CURDIR)/debian/kong-binary-cassandra-dao"$$dn"; \
+		ln -s cassandra.lua $(CURDIR)/debian/kong-binary-cassandra-dao"$$dn"/cassandra_binary.lua; \
+	done
+
+override_dh_auto_test:
+	@:
