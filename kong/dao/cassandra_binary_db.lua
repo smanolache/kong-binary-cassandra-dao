@@ -30,40 +30,25 @@ local function build_opts(base, override)
    return r
 end
 
+local cl_mapping = {
+   ["ANY"]          = db.CL.ANY,
+   ["ONE"]          = db.CL.ONE,
+   ["TWO"]          = db.CL.TWO,
+   ["THREE"]        = db.CL.THREE,
+   ["QUORUM"]       = db.CL.QUORUM,
+   ["ALL"]          = db.CL.ALL,
+   ["LOCAL_QUORUM"] = db.CL.LOCAL_QUORUM,
+   ["EACH_QUORUM"]  = db.CL.EACH_QUORUM,
+   ["SERIAL"]       = db.CL.SERIAL,
+   ["LOCAL_SERIAL"] = db.CL.LOCAL_SERIAL,
+   ["LOCAL_ONE"]    = db.CL.LOCAL_ONE
+}
+
 local function cl(consistency)
    if "string" == type(consistency) then
-      if "ANY" == consistency then
-	 return db.CL.ANY
-      end
-      if "ONE" == consistency then
-	 return db.CL.ONE
-      end
-      if "TWO" == consistency then
-	 return db.CL.TWO
-      end
-      if "THREE" == consistency then
-	 return db.CL.THREE
-      end
-      if "QUORUM" == consistency then
-	 return db.CL.QUORUM
-      end
-      if "ALL" == consistency then
-	 return db.CL.ALL
-      end
-      if "LOCAL_QUORUM" == consistency then
-	 return db.CL.LOCAL_QUORUM
-      end
-      if "EACH_QUORUM" == consistency then
-	 return db.CL.EACH_QUORUM
-      end
-      if "SERIAL" == consistency then
-	 return db.CL.SERIAL
-      end
-      if "LOCAL_SERIAL" == consistency then
-	 return db.CL.LOCAL_SERIAL
-      end
-      if "LOCAL_ONE" == consistency then
-	 return db.CL.LOCAL_ONE
+      local cl = cl_mapping[consistency]
+      if nil ~= cl then
+	 return cl
       end
       return db.CL.ONE
    end
@@ -101,9 +86,27 @@ local function init_cluster(opts)
 	 return nil, "cannot build ssl object; probably out-of-memory"
       end
 
-      rc = ssl:set_verify_flags(opts.ssl_options.verify)
-      if 0 ~= rc then
-	 return nil, db.cass_error_desc(rc)
+      ssl:set_verify_flags(opts.ssl_options.verify)
+
+      if opts.ssl_options.certificate then
+	 rc = ssl:set_cert(opts.ssl_options.certificate)
+	 if 0 ~= rc then
+	    return nil, db.cass_error_desc(rc)
+	 end
+      end
+
+      if opts.ssl_options.key then
+	 rc = ssl:set_private_key(opts.ssl_options.key, "")
+	 if 0 ~= rc then
+	    return nil, db.cass_error_desc(rc)
+	 end
+      end
+
+      if opts.ssl_options.certificate_authority then
+	 rc = ssl:add_trusted_cert(opts.ssl_options.certificate_authority)
+	 if 0 ~= rc then
+	    return nil, db.cass_error_desc(rc)
+	 end
       end
 
       cluster:set_ssl(ssl)
@@ -303,11 +306,11 @@ end
 
 local function init_session(cluster, keyspace)
    if nil == cluster then
-      return nil
+      return nil, "no cluster"
    end
    local session = db.cass_session_new()
    if nil == session then
-      return nil
+      return nil, "cannot create a new cassandra session: probably oom"
    end
 
    local future
@@ -319,9 +322,9 @@ local function init_session(cluster, keyspace)
    future:wait()
    local rc = future:error_code()
    if 0 ~= rc then
-      return nil
+      return nil, db.cass_error_desc(rc)
    end
-   return session
+   return session, nil
 end
 
 local function cleanup_db(local_cluster, local_session, obj_cluster, obj_session)
@@ -352,6 +355,13 @@ CassBinaryDB.dao_insert_values = {
     return timestamp.get_utc()
   end
 }
+
+local function read_file(file_name)
+   local f = assert(io.open(file_name, "rb"))
+   local c = f:read("*all")
+   f:close()
+   return c
+end
 
 function CassBinaryDB:new(options)
    local conn_opts = {
@@ -400,9 +410,11 @@ function CassBinaryDB:new(options)
 	 keyspace    = options.keyspace or "kong"
       },
       ssl_options = {
-	 enabled = options.ssl and options.ssl.enabled or false,
-	 verify  = options.ssl and options.ssl.verify or 0,
-	 ca      = options.ssl and options.ssl.certificate_authority or nil
+	 enabled               = options.ssl and options.ssl.enabled or false,
+	 verify                = options.ssl and options.ssl.verify or db.CONSTANTS.SSL_VERIFY_NONE,
+	 certificate_authority = options.ssl and options.ssl.certificate_authority or nil,
+	 key                   = options.ssl and options.ssl.key or nil,
+	 certificate           = options.ssl and options.ssl.certificate or nil
       }
    }
 
@@ -447,6 +459,21 @@ function CassBinaryDB:new(options)
       }
    end
 
+   if conn_opts.ssl_options.enabled then
+      if conn_opts.ssl_options.certificate_authority then
+	 local c = read_file(conn_opts.ssl_options.certificate_authority)
+	 conn_opts.ssl_options.certificate_authority = c
+      end
+      if conn_opts.ssl_options.certificate then
+	 local c = read_file(conn_opts.ssl_options.certificate)
+	 conn_opts.ssl_options.certificate = c
+      end
+      if conn_opts.ssl_options.key then
+	 local c = read_file(conn_opts.ssl_options.key)
+	 conn_opts.ssl_options.key = c
+      end
+   end
+
    CassBinaryDB.super.new(self, "cassandra_binary", conn_opts)
 end
 
@@ -462,7 +489,7 @@ function CassBinaryDB:init()
 
    local c, cerr = init_cluster(opts)
    if cerr then
-      -- TODO
+      self.err = cerr
       return
    end
 
@@ -470,7 +497,7 @@ function CassBinaryDB:init()
 
    local s, serr = init_session(singleton_cluster, opts.keyspace)
    if serr then
-      -- TODO
+      self.err = serr
       return
    end
 
@@ -508,89 +535,62 @@ local function init_db(opts, no_keyspace)
    return cluster, session
 end
 
+local type_aliases = {
+   [db.TYPES.VALUE_TYPE_TEXT]      = db.TYPES.VALUE_TYPE_ASCII,
+   [db.TYPES.VALUE_TYPE_VARCHAR]   = db.TYPES.VALUE_TYPE_ASCII,
+   
+   [db.TYPES.VALUE_TYPE_COUNTER]   = db.TYPES.VALUE_TYPE_BIGINT,
+   [db.TYPES.VALUE_TYPE_TIMESTAMP] = db.TYPES.VALUE_TYPE_BIGINT,
+   [db.TYPES.VALUE_TYPE_TIME]      = db.TYPES.VALUE_TYPE_BIGINT,
+   
+   [db.TYPES.VALUE_TYPE_VARINT]    = db.TYPES.VALUE_TYPE_BLOB,
+   
+   [db.TYPES.VALUE_TYPE_TIMEUUID]  = db.TYPES.VALUE_TYPE_UUID,
+   
+   [db.TYPES.VALUE_TYPE_SET]       = db.TYPES.VALUE_TYPE_LIST,
+   [db.TYPES.VALUE_TYPE_MAP]       = db.TYPES.VALUE_TYPE_MAP
+}
+
+local types_mt = {
+   __index = function(t, key)
+      local v = type_aliases[key]
+      if nil ~= v then
+	 return t[v]
+      end
+      return nil
+   end
+}
+
+local base_bind_functors = {
+   [db.TYPES.VALUE_TYPE_ASCII]     = function(stmt, ndx, value) return stmt:bind_string(ndx, value) end,
+   [db.TYPES.VALUE_TYPE_BIGINT]    = function(stmt, ndx, value) return stmt:bind_int64(ndx, value) end,
+   [db.TYPES.VALUE_TYPE_BLOB]      = function(stmt, ndx, value) return stmt:bind_bytes(ndx, value) end,
+   [db.TYPES.VALUE_TYPE_BOOLEAN]   = function(stmt, ndx, value) return stmt:bind_bool(ndx, value) end,
+   [db.TYPES.VALUE_TYPE_DATE]      = function(stmt, ndx, value) return stmt:bind_uint32(ndx, value) end,
+   [db.TYPES.VALUE_TYPE_DECIMAL]   = function(stmt, ndx, value) return stmt:bind_decimal(ndx, value) end,
+   [db.TYPES.VALUE_TYPE_DOUBLE]    = function(stmt, ndx, value) return stmt:bind_double(ndx, value) end,
+   [db.TYPES.VALUE_TYPE_FLOAT]     = function(stmt, ndx, value) return stmt:bind_float(ndx, value) end,
+   [db.TYPES.VALUE_TYPE_INET]      = function(stmt, ndx, value) return stmt:bind_inet(ndx, value) end,
+   [db.TYPES.VALUE_TYPE_INT]       = function(stmt, ndx, value) return stmt:bind_int32(ndx, value) end,
+--   [db.TYPES.VALUE_TYPE_TINYINT]   = function(stmt, ndx, value) return stmt:bind_int8(ndx, value) end,
+--   [db.TYPES.VALUE_TYPE_SMALLINT]  = function(stmt, ndx, value) return stmt:bind_int16(ndx, value) end,
+   [db.TYPES.VALUE_TYPE_UUID]      = function(stmt, ndx, value) return stmt:bind_uuid(ndx, value) end,
+   [db.TYPES.VALUE_TYPE_LIST]      = function(stmt, ndx, value) return stmt:bind_collection(ndx, value) end,
+   [db.TYPES.VALUE_TYPE_UDT]       = function(stmt, ndx, value) return stmt:bind_user_type(ndx, value) end,
+   [db.TYPES.VALUE_TYPE_TUPLE]     = function(stmt, ndx, value) return stmt:bind_tuple(ndx, value) end
+}
+
+local bind_functors = setmetatable(base_bind_functors, types_mt)
+
 local function bind_value_to_stmt(stmt, value, value_type, ndx)
    if nil == value then
       return stmt:bind_null(ndx)
    end
 
-   if db.TYPES.VALUE_TYPE_ASCII == value_type or
-      db.TYPES.VALUE_TYPE_TEXT == value_type or
-      db.TYPES.VALUE_TYPE_VARCHAR == value_type
-   then
-      return stmt:bind_string(ndx, value)
+   local functor = bind_functors[value_type]
+   if nil ~= functor then
+      return functor(stmt, ndx, value)
    end
-
-   if db.TYPES.VALUE_TYPE_BIGINT == value_type or
-      db.TYPES.VALUE_TYPE_COUNTER == value_type or
-      db.TYPES.VALUE_TYPE_TIMESTAMP == value_type or
-      db.TYPES.VALUE_TYPE_TIME == value_type
-   then
-      return stmt:bind_int64(ndx, value)
-   end
-
-   if db.TYPES.VALUE_TYPE_BLOB == value_type or
-      db.TYPES.VALUE_TYPE_VARINT == value_type
-   then
-      return stmt:bind_bytes(ndx, value)
-   end
-
-   if db.TYPES.VALUE_TYPE_BOOLEAN == value_type then
-      return stmt:bind_bool(ndx, value)
-   end
-
-   if db.TYPES.VALUE_TYPE_DATE == value_type then
-      return stmt:bind_uint32(ndx, value)
-   end
-
-   if db.TYPES.VALUE_TYPE_DECIMAL == value_type then
-      return stmt:bind_decimal(ndx, value.number, value.scale)
-   end
-
-   if db.TYPES.VALUE_TYPE_DOUBLE == value_type then
-      return stmt:bind_double(ndx, value)
-   end
-
-   if db.TYPES.VALUE_TYPE_FLOAT == value_type then
-      return stmt:bind_float(ndx, value)
-   end
-
-   if db.TYPES.VALUE_TYPE_INET == value_type then
-      return stmt:bind_inet(ndx, value)
-   end
-
-   if db.TYPES.VALUE_TYPE_INT == value_type then
-      return stmt:bind_int32(ndx, value)
-   end
-
-   if db.TYPES.VALUE_TYPE_TINYINT == value_type then
-      return stmt:bind_int8(ndx, value)
-   end
-
-   if db.TYPES.VALUE_TYPE_SMALLINT == value_type then
-      return stmt:bind_int16(ndx, value)
-   end
-
-   if db.TYPES.VALUE_TYPE_UUID == value_type or
-      db.TYPES.VALUE_TYPE_TIMEUUID == value_type
-   then
-      return stmt:bind_uuid(ndx, value)
-   end
-
-   if db.TYPES.VALUE_TYPE_LIST == value_type or
-      db.TYPES.VALUE_TYPE_SET == value_type or
-      db.TYPES.VALUE_TYPE_MAP == value_type
-   then
-      return stmt:bind_collection(ndx, value)
-   end
-
-   if db.TYPES.VALUE_TYPE_UDT == value_type then
-      return stmt:bind_user_type(ndx, value)
-   end
-
-   if db.TYPES.VALUE_TYPE_TUPLE == value_type then
-      return stmt:bind_tuple(ndx, value)
-   end
-
    return db.ERRORS.LIB_INVALID_VALUE_TYPE
 end
 
@@ -618,105 +618,86 @@ local function serialize_uuid(v)
    return r
 end
 
+local read_value_functors = {}
+
 local function read_value(value, value_type)
-   local elem = nil
-   if nil == value then
-      elem = nil
-   elseif value:is_null() then
-      elem = nil
-   elseif db.TYPES.VALUE_TYPE_ASCII == value_type or
-      db.TYPES.VALUE_TYPE_TEXT == value_type or
-      db.TYPES.VALUE_TYPE_VARCHAR == value_type
-   then
-      local rc
-      rc, elem = value:get_string()
-      if 0 ~= rc then
-	 return nil, db.cass_error_desc(rc)
-      end
-   elseif db.TYPES.VALUE_TYPE_BIGINT == value_type or
-      db.TYPES.VALUE_TYPE_COUNTER == value_type or
-      db.TYPES.VALUE_TYPE_TIMESTAMP == value_type or
-      db.TYPES.VALUE_TYPE_TIME == value_type
-   then
-      local rc
-      rc, elem = value:get_int64()
-      if 0 ~= rc then
-	 return nil, db.cass_error_desc(rc)
-      end
-   elseif db.TYPES.VALUE_TYPE_BLOB == value_type or
-      db.TYPES.VALUE_TYPE_VARINT == value_type
-   then
-      local rc
-      rc, elem = value:get_bytes()
-      if 0 ~= rc then
-	 return nil, db.cass_error_desc(rc)
-      end
-   elseif db.TYPES.VALUE_TYPE_BOOLEAN == value_type then
-      local rc
-      rc, elem = value:get_bool()
-      if 0 ~= rc then
-	 return nil, db.cass_error_desc(rc)
-      end
-   elseif db.TYPES.VALUE_TYPE_DATE == value_type then
-      local rc
-      rc, elem = value:get_uint32()
-      if 0 ~= rc then
-	 return nil, db.cass_error_desc(rc)
-      end
-   elseif db.TYPES.VALUE_TYPE_DECIMAL == value_type then
-      local rc
-      rc, elem = value:get_decimal()
-      if 0 ~= rc then
-	 return nil, db.cass_error_desc(rc)
-      end
-   elseif db.TYPES.VALUE_TYPE_DOUBLE == value_type then
-      local rc
-      rc, elem = value:get_double()
-      if 0 ~= rc then
-	 return nil, db.cass_error_desc(rc)
-      end
-   elseif db.TYPES.VALUE_TYPE_FLOAT == value_type then
-      local rc
-      rc, elem = value:get_float()
-      if 0 ~= rc then
-	 return nil, db.cass_error_desc(rc)
-      end
-   elseif db.TYPES.VALUE_TYPE_INET == value_type then
-      local rc
-      rc, elem = value:get_inet()
-      if 0 ~= rc then
-	 return nil, db.cass_error_desc(rc)
-      end
-   elseif db.TYPES.VALUE_TYPE_INT == value_type then
-      local rc
-      rc, elem = value:get_int32()
-      if 0 ~= rc then
-	 return nil, db.cass_error_desc(rc)
-      end
-   elseif db.TYPES.VALUE_TYPE_TINYINT == value_type then
-      local rc
-      rc, elem = value:get_int8()
-      if 0 ~= rc then
-	 return nil, db.cass_error_desc(rc)
-      end
-   elseif db.TYPES.VALUE_TYPE_SMALLINT == value_type then
-      local rc
-      rc, elem = value:get_int16()
-      if 0 ~= rc then
-	 return nil, db.cass_error_desc(rc)
-      end
-   elseif db.TYPES.VALUE_TYPE_UUID == value_type or
-      db.TYPES.VALUE_TYPE_TIMEUUID == value_type
-   then
-      local rc, uid
-      rc, uid = value:get_uuid()
-      if 0 ~= rc then
-	 return nil, db.cass_error_desc(rc)
-      end
-      elem = serialize_uuid(uid)
-   elseif db.TYPES.VALUE_TYPE_LIST == value_type or
-      db.TYPES.VALUE_TYPE_SET == value_type
-   then
+   if nil == value or value:is_null() then
+      return nil, nil
+   end
+   local f = read_value_functors[value_type]
+   if nil ~= f then
+      return f(value)
+   end
+   return nil, nil
+end
+
+local base_read_value_functors = {
+   [db.TYPES.VALUE_TYPE_ASCII]     = function(value)
+      local rc, elem = value:get_string()
+      if 0 ~= rc then return nil, db.cass_error_desc(rc) end
+      return elem, nil
+   end,
+   [db.TYPES.VALUE_TYPE_BIGINT]    = function(value)
+      local rc, elem = value:get_int64()
+      if 0 ~= rc then return nil, db.cass_error_desc(rc) end
+      return elem, nil
+   end,
+   [db.TYPES.VALUE_TYPE_BLOB]      = function(value)
+      local rc, elem = value:get_bytes()
+      if 0 ~= rc then return nil, db.cass_error_desc(rc) end
+      return elem, nil
+   end,
+   [db.TYPES.VALUE_TYPE_BOOLEAN]   = function(value)
+      local rc, elem = value:get_bool()
+      if 0 ~= rc then return nil, db.cass_error_desc(rc) end
+      return elem, nil
+   end,
+   [db.TYPES.VALUE_TYPE_DATE]      = function(value)
+      local rc, elem = value:get_uint32()
+      if 0 ~= rc then return nil, db.cass_error_desc(rc) end
+      return elem, nil
+   end,
+   [db.TYPES.VALUE_TYPE_DECIMAL]   = function(value)
+      local rc, elem = value:get_decimal()
+      if 0 ~= rc then return nil, db.cass_error_desc(rc) end
+      return elem, nil
+   end,
+   [db.TYPES.VALUE_TYPE_DOUBLE]    = function(value)
+      local rc, elem = value:get_double()
+      if 0 ~= rc then return nil, db.cass_error_desc(rc) end
+      return elem, nil
+   end,
+   [db.TYPES.VALUE_TYPE_FLOAT]     = function(value)
+      local rc, elem = value:get_float()
+      if 0 ~= rc then return nil, db.cass_error_desc(rc) end
+      return elem, nil
+   end,
+   [db.TYPES.VALUE_TYPE_INET]      = function(value)
+      local rc, elem = value:get_inet()
+      if 0 ~= rc then return nil, db.cass_error_desc(rc) end
+      return elem, nil
+   end,
+   [db.TYPES.VALUE_TYPE_INT]       = function(value)
+      local rc, elem = value:get_int32()
+      if 0 ~= rc then return nil, db.cass_error_desc(rc) end
+      return elem, nil
+   end,
+--   [db.TYPES.VALUE_TYPE_TINYINT]   = function(value)
+--      local rc, elem = value:get_int8()
+--      if 0 ~= rc then return nil, db.cass_error_desc(rc) end
+--      return elem, nil
+--   end,
+--   [db.TYPES.VALUE_TYPE_SMALLINT]  = function(value)
+--      local rc, elem = value:get_int16()
+--      if 0 ~= rc then return nil, db.cass_error_desc(rc) end
+--      return elem, nil
+--   end,
+   [db.TYPES.VALUE_TYPE_UUID]      = function(value)
+      local rc, elem = value:get_uuid()
+      if 0 ~= rc then return nil, db.cass_error_desc(rc) end
+      return serialize_uuid(elem), nil
+   end,
+   [db.TYPES.VALUE_TYPE_LIST]      = function(value)
       local it = value:iterator_from_collection()
       local s = {}
       while it:next() do
@@ -730,8 +711,9 @@ local function read_value(value, value_type)
 	 end
 	 s[#s + 1] = v
       end
-      elem = s
-   elseif db.TYPES.VALUE_TYPE_MAP == value_type then
+      return s, nil
+   end,
+   [db.TYPES.VALUE_TYPE_MAP]       = function(value)
       local it = value:iterator_from_collection()
       local s = {}
       while it:next() do
@@ -757,8 +739,9 @@ local function read_value(value, value_type)
 	 end
 	 s[k] = v
       end
-      elem = s
-   elseif db.TYPES.VALUE_TYPE_UDT == value_type then
+      return s, nil
+   end,
+   [db.TYPES.VALUE_TYPE_UDT]       = function(value)
       local it = value:iterator_fields_from_user_type()
       local s = {}
       while it:next() do
@@ -776,8 +759,9 @@ local function read_value(value, value_type)
 	 end
 	 s[name] = v
       end
-      elem = s
-   elseif db.TYPES.VALUE_TYPE_TUPLE == value_type then
+      return s, nil
+   end,
+   [db.TYPES.VALUE_TYPE_TUPLE]     = function(value)
       local it = value:iterator_from_tuple()
       local s = {}
       while it:next() do
@@ -791,13 +775,11 @@ local function read_value(value, value_type)
 	 end
 	 s[#s + 1] = v
       end
-      elem = s
-   else
-      elem = nil
+      return s, nil
    end
+}
 
-   return elem, nil
-end
+read_value_functors = setmetatable(base_read_value_functors, types_mt)
 
 local function result_to_table(result, schema)
    local json = require "cjson"
