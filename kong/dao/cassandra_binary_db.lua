@@ -541,7 +541,7 @@ local type_aliases = {
    
    [db.TYPES.VALUE_TYPE_COUNTER]   = db.TYPES.VALUE_TYPE_BIGINT,
    [db.TYPES.VALUE_TYPE_TIMESTAMP] = db.TYPES.VALUE_TYPE_BIGINT,
-   [db.TYPES.VALUE_TYPE_TIME]      = db.TYPES.VALUE_TYPE_BIGINT,
+--   [db.TYPES.VALUE_TYPE_TIME]      = db.TYPES.VALUE_TYPE_BIGINT,
    
    [db.TYPES.VALUE_TYPE_VARINT]    = db.TYPES.VALUE_TYPE_BLOB,
    
@@ -566,7 +566,7 @@ local base_bind_functors = {
    [db.TYPES.VALUE_TYPE_BIGINT]    = function(stmt, ndx, value) return stmt:bind_int64(ndx, value) end,
    [db.TYPES.VALUE_TYPE_BLOB]      = function(stmt, ndx, value) return stmt:bind_bytes(ndx, value) end,
    [db.TYPES.VALUE_TYPE_BOOLEAN]   = function(stmt, ndx, value) return stmt:bind_bool(ndx, value) end,
-   [db.TYPES.VALUE_TYPE_DATE]      = function(stmt, ndx, value) return stmt:bind_uint32(ndx, value) end,
+--   [db.TYPES.VALUE_TYPE_DATE]      = function(stmt, ndx, value) return stmt:bind_uint32(ndx, value) end,
    [db.TYPES.VALUE_TYPE_DECIMAL]   = function(stmt, ndx, value) return stmt:bind_decimal(ndx, value) end,
    [db.TYPES.VALUE_TYPE_DOUBLE]    = function(stmt, ndx, value) return stmt:bind_double(ndx, value) end,
    [db.TYPES.VALUE_TYPE_FLOAT]     = function(stmt, ndx, value) return stmt:bind_float(ndx, value) end,
@@ -652,11 +652,11 @@ local base_read_value_functors = {
       if 0 ~= rc then return nil, db.cass_error_desc(rc) end
       return elem, nil
    end,
-   [db.TYPES.VALUE_TYPE_DATE]      = function(value)
-      local rc, elem = value:get_uint32()
-      if 0 ~= rc then return nil, db.cass_error_desc(rc) end
-      return elem, nil
-   end,
+   -- [db.TYPES.VALUE_TYPE_DATE]      = function(value)
+   --    local rc, elem = value:get_uint32()
+   --    if 0 ~= rc then return nil, db.cass_error_desc(rc) end
+   --    return elem, nil
+   -- end,
    [db.TYPES.VALUE_TYPE_DECIMAL]   = function(value)
       local rc, elem = value:get_decimal()
       if 0 ~= rc then return nil, db.cass_error_desc(rc) end
