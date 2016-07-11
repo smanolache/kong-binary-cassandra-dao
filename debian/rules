@@ -22,9 +22,12 @@ export DEB_CFLAGS_MAINT_APPEND = -Wno-strict-aliasing -fno-strict-aliasing
 	dh $@
 
 override_dh_auto_install:
-	install -D -t $(CURDIR)/debian/kong-binary-cassandra-dao/usr/share/lua/5.1/kong/dao kong/dao/cassandra_binary_db.lua
-	install -D -t $(CURDIR)/debian/kong-binary-cassandra-dao/usr/share/lua/5.1/kong/plugins/rate-limiting/dao kong/plugins/rate-limiting/dao/cassandra_binary.lua
-	install -D -t $(CURDIR)/debian/kong-binary-cassandra-dao/usr/share/lua/5.1/kong/plugins/response-ratelimiting/dao kong/plugins/response-ratelimiting/dao/cassandra_binary.lua
+	install -d $(CURDIR)/debian/kong-binary-cassandra-dao/usr/share/lua/5.1/kong/dao \
+		   $(CURDIR)/debian/kong-binary-cassandra-dao/usr/share/lua/5.1/kong/plugins/rate-limiting/dao \
+		   $(CURDIR)/debian/kong-binary-cassandra-dao/usr/share/lua/5.1/kong/plugins/response-ratelimiting/dao
+	install kong/dao/cassandra_binary_db.lua $(CURDIR)/debian/kong-binary-cassandra-dao/usr/share/lua/5.1/kong/dao
+	install kong/plugins/rate-limiting/dao/cassandra_binary.lua $(CURDIR)/debian/kong-binary-cassandra-dao/usr/share/lua/5.1/kong/plugins/rate-limiting/dao
+	install kong/plugins/response-ratelimiting/dao/cassandra_binary.lua $(CURDIR)/debian/kong-binary-cassandra-dao/usr/share/lua/5.1/kong/plugins/response-ratelimiting/dao
 	for i in /usr/share/lua/5.1/kong/plugins/*/migrations/cassandra.lua  \
 	         /usr/share/lua/5.1/kong/dao/migrations/cassandra.lua; do    \
 		dn=$$(dirname "$$i");                                        \
